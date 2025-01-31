@@ -16,7 +16,9 @@ import com.example.gpiocontrol.ui.theme.GPIOcontrolTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import ZtlApi.ZtlManager
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,32 +40,37 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleGpioOnStart() {
-        // Use coroutines instead of raw threads
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 // Initialize ZtlManager with the Context
                 val ztlManager = ZtlManager.GetInstance()
-                ztlManager.setContext(applicationContext) // Set the context as per the instructions
+                ztlManager.setContext(applicationContext)
 
                 if (ztlManager == null) {
                     Log.e("GPIO", "ZtlManager instance is null!")
                     return@launch
                 }
 
-                // String-based GPIO name
                 val gpioPorts = listOf("GPIO7_A5", "GPIO7_A6", "GPIO7_B3", "GPIO7_B4", "GPIO7_B5")
-                for (port in gpioPorts) {
-                    // Call the method without expecting a return value
-                    ztlManager.setGpioValue(port, 1) // Assuming this is a void method
+                while (true) { // Infinite loop for continuous blinking
+                    for (port in gpioPorts) {
+                        ztlManager.setGpioValue(port, 1) // Turn LED ON
+                        Log.d("GPIO", "$port set HIGH")
+                    }
+                    delay(1000) // Wait 1 second
 
-                    Log.d("GPIO", "$port set HIGH successfully")
+                    for (port in gpioPorts) {
+                        ztlManager.setGpioValue(port, 0) // Turn LED OFF
+                        Log.d("GPIO", "$port set LOW")
+                    }
+                    delay(1000) // Wait 1 second
                 }
-
             } catch (e: Exception) {
                 Log.e("GPIO", "Error controlling GPIO: ${e.message}")
             }
         }
     }
+
 
     @Composable
     fun Greeting(name: String, modifier: Modifier = Modifier) {
