@@ -17,7 +17,7 @@ import ZtlApi.ZtlManager
 import java.io.IOException
 
 class MainActivity : ComponentActivity() {
-    private val gpioPin = 221 // GPIO number
+    private val gpioPin = 225 // GPIO number
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
