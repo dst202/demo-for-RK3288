@@ -1,6 +1,7 @@
 package com.example.gpiocontrol
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -12,13 +13,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.gpiocontrol.ui.theme.GPIOcontrolTheme
-import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import ZtlApi.ZtlManager
-import java.io.IOException
 
 class MainActivity : ComponentActivity() {
-    private val gpioPin = 225 // GPIO number
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -38,34 +38,31 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleGpioOnStart() {
-        Thread {
+        // Use coroutines instead of raw threads
+        CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Use `GetInstance()` to get the singleton instance of ZtlManager
-                val ztlManager = ZtlManager.GetInstance() // FIXED: Use GetInstance()
+                // Initialize ZtlManager with the Context
+                val ztlManager = ZtlManager.GetInstance()
+                ztlManager.setContext(applicationContext) // Set the context as per the instructions
 
-                // Set GPIO pin HIGH
-                val gpioType = gpioPin
-                val isInput = false // Set as output
-                val isHigh = true // Set high
-
-                val result = ztlManager.setGpioValue(gpioType, isInput, isHigh)
-
-                if (result == 1) {
-                    Log.d("GPIO", "GPIO $gpioType set HIGH successfully")
-                } else {
-                    Log.e("GPIO", "Failed to set GPIO $gpioType. Error code: $result")
+                if (ztlManager == null) {
+                    Log.e("GPIO", "ZtlManager instance is null!")
+                    return@launch
                 }
+
+                // String-based GPIO name
+                val gpioPorts = listOf("GPIO7_A5", "GPIO7_A6", "GPIO7_B3", "GPIO7_B4", "GPIO7_B5")
+                for (port in gpioPorts) {
+                    // Call the method without expecting a return value
+                    ztlManager.setGpioValue(port, 1) // Assuming this is a void method
+
+                    Log.d("GPIO", "$port set HIGH successfully")
+                }
+
             } catch (e: Exception) {
                 Log.e("GPIO", "Error controlling GPIO: ${e.message}")
             }
-        }.start()
-    }
-
-    @Throws(IOException::class, InterruptedException::class)
-    private fun executeShellCommand(command: String): String {
-        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", command))
-        process.waitFor() // Wait for command to complete
-        return "Done"
+        }
     }
 
     @Composable
