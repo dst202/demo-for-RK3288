@@ -3,7 +3,7 @@ package android_serialport_api;
 
 
 
-import com.sysout.flutter_serial_port_api.SerialPort;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
