@@ -1,0 +1,59 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace "com.example.serialport"  // ✅ Required for AGP 8+
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 21  // ✅ Explicitly define minSdk
+        targetSdk 35  // ✅ Ensure target SDK is defined
+        versionCode 1  // ✅ Add versionCode explicitly
+        versionName "1.0.0"  // ✅ Define versionName
+
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'  // ✅ Fixed deprecated file
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'CMakeLists.txt'
+            version "3.31.4"  // ✅ Use an installed version (Update if needed)
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ["META-INF/*.kotlin_module"]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17  // ✅ Upgrade to Java 17 for Gradle 9+
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    ndkVersion '28.0.12916984'
+}
+
+dependencies {
+    // ✅ Replace deprecated 'compile' with 'implementation'
+    implementation "androidx.annotation:annotation:1.7.0"
+
+    // ✅ Add required testing dependencies
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}
+
+// ✅ Prevent errors if 'maven_publish.gradle' is missing
+if (file('../maven_publish.gradle').exists()) {
+    apply from: '../maven_publish.gradle'
+}
