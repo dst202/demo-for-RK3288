@@ -2,26 +2,27 @@ package com.example.gpiocontrol
 
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import com.example.gpiocontrol.ui.theme.GPIOcontrolTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import ZtlApi.ZtlManager
 import android.serialport.SerialPort
+import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
-import java.io.File
 
 class MainActivity : ComponentActivity() {
 
@@ -30,133 +31,155 @@ class MainActivity : ComponentActivity() {
     private var uartOutput: OutputStream? = null
     private var uartInput: InputStream? = null
 
+    // State to hold received messages
+    private val receivedMessages = mutableStateListOf<String>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             GPIOcontrolTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+                MainScreen(
+                    receivedMessages = receivedMessages,
+                    onSendClicked = { message ->
+                        sendMessage(message)
+                    }
+                )
             }
         }
 
-        // Initialize UART before starting GPIO control
+        // Initialize UART
         initUart()
-
-        // Start toggling GPIO on startup
-        toggleGpioOnStart()
+        // Read UART data
+        readUartData()
     }
 
     /**
-     * Initializes the UART port. Adjust the serial port path and baud rate according to your device.
+     * Initializes the UART port.
      */
     private fun initUart() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Open the serial port with all necessary parameters
-                serialPort = SerialPort(
-                    File("/dev/ttyS1"),  // Adjust this if your device uses a different port
-                    19200,               // Baud rate
-                    0,                   // Flags (usually 0)
-                    8,                   // Data bits (usually 8)
-                    1,                   // Stop bits (1 or 2)
-                    0                    // Parity (0 = None, 1 = Odd, 2 = Even)
-                )
+                // Request root access before opening serial port
+                val process = Runtime.getRuntime().exec("su")
+                val os = process.outputStream
+                os.write("chmod 666 /dev/ttyS1\n".toByteArray())
+                os.write("exit\n".toByteArray())
+                os.flush()
+                os.close()
+                process.waitFor()
 
+                // Open serial port
+                serialPort = SerialPort(File("/dev/ttyS1"), 19200, 0, 8, 1, 0)
                 uartOutput = serialPort?.outputStream
                 uartInput = serialPort?.inputStream
 
-                Log.d("UART", "UART initialized on /dev/ttyS1 at 19200 baud")
-
+                Log.d("UART", "UART initialized on /dev/ttyS1 at 19200 baud with root access")
             } catch (e: Exception) {
-                Log.e("UART", "Error initializing UART: ${e.message}")
+                Log.e("UART", "Error initializing UART with root: ${e.message}")
             }
         }
     }
 
 
     /**
-     * Continuously reads data from the UART input stream and logs it.
+     * Reads UART data and updates the received messages.
      */
-    private suspend fun readUartData() {
-        val buffer = ByteArray(1024)
-        while (true) {
-            try {
-                val bytesRead = uartInput?.read(buffer) ?: -1
-                if (bytesRead > 0) {
-                    val received = String(buffer, 0, bytesRead)
-                    Log.d("UART", "Received: $received")
+    private fun readUartData() {
+        CoroutineScope(Dispatchers.IO).launch {
+            val buffer = ByteArray(1024)
+            while (true) {
+                try {
+                    val bytesRead = uartInput?.read(buffer) ?: -1
+                    if (bytesRead > 0) {
+                        val receivedData = buffer.copyOfRange(0, bytesRead)
+                        val receivedHex = receivedData.joinToString(" ") { "0x${it.toUByte().toString(16)}" }
+                        Log.d("UART", "Received: $receivedHex")
+
+                        // Update UI with received data
+                        runOnUiThread {
+                            receivedMessages.add(receivedHex)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("UART", "Error reading UART: ${e.message}")
+                    break
                 }
-            } catch (e: Exception) {
-                Log.e("UART", "Error reading UART: ${e.message}")
-                break
             }
         }
     }
 
     /**
-     * Toggles GPIO ports on and off in an infinite loop. When setting the GPIOs high,
-     * it sends the string "28 ,BB 66 , 29" over UART.
+     * Sends a message via UART.
      */
-    private fun toggleGpioOnStart() {
+    private fun sendMessage(message: String) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                // Initialize ZtlManager with the Context
-                val ztlManager = ZtlManager.GetInstance()
-                ztlManager.setContext(applicationContext)
-
-                if (ztlManager == null) {
-                    Log.e("GPIO", "ZtlManager instance is null!")
-                    return@launch
-                }
-
-                val gpioPorts = listOf("GPIO7_A5", "GPIO7_A6", "GPIO7_B3", "GPIO7_B4", "GPIO7_B5")
-                while (true) { // Infinite loop for continuous blinking
-                    // Turn GPIOs ON
-                    for (port in gpioPorts) {
-                        ztlManager.setGpioValue(port, 1) // Turn LED ON
-                        Log.d("GPIO", "$port set HIGH")
-                    }
-                    // When GPIOs are high, send "fcuk me" over UART.
-                    try {
-                        uartOutput?.write(byteArrayOf(0x28.toByte(), 0xBB.toByte(), 0x66.toByte(), 0x29.toByte()))
-                        uartOutput?.flush()
-                        Log.d("UART", "Sent: fcuk me")
-                    } catch (e: Exception) {
-                        Log.e("UART", "Error sending UART data: ${e.message}")
-                    }
-                    delay(1000) // Wait 1 second
-
-                    // Turn GPIOs OFF
-                    for (port in gpioPorts) {
-                        ztlManager.setGpioValue(port, 0) // Turn LED OFF
-                        Log.d("GPIO", "$port set LOW")
-                    }
-                    delay(1000) // Wait 1 second
-                }
+                // Convert the input string to bytes and send
+                val command = message.toByteArray()
+                uartOutput?.write(command)
+                uartOutput?.flush()
+                Log.d("UART", "Sent: $message")
             } catch (e: Exception) {
-                Log.e("GPIO", "Error controlling GPIO: ${e.message}")
+                Log.e("UART", "Error sending UART data: ${e.message}")
             }
         }
     }
+}
 
-    @Composable
-    fun Greeting(name: String, modifier: Modifier = Modifier) {
-        Text(
-            text = "Hello $name!",
-            modifier = modifier
+/**
+ * Composable UI for sending and receiving UART messages.
+ */
+@Composable
+fun MainScreen(
+    receivedMessages: List<String>,
+    onSendClicked: (String) -> Unit
+) {
+    var textFieldValue by remember { mutableStateOf(TextFieldValue("")) }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        // Input Field
+        OutlinedTextField(
+            value = textFieldValue,
+            onValueChange = { textFieldValue = it },
+            label = { Text("Enter Command") },
+            modifier = Modifier.fillMaxWidth()
         )
-    }
 
-    @Preview(showBackground = true)
-    @Composable
-    fun GreetingPreview() {
-        GPIOcontrolTheme {
-            Greeting("GPIO Control")
+        // Send Button
+        Button(
+            onClick = {
+                if (textFieldValue.text.isNotEmpty()) {
+                    onSendClicked(textFieldValue.text)
+                    textFieldValue = TextFieldValue("") // Clear the input field
+                }
+            },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+        ) {
+            Text("Send")
         }
+
+        // Received Messages List
+        Text(
+            text = "Received Messages:",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 16.dp)
+        )
+        LazyColumn(modifier = Modifier.fillMaxHeight().padding(top = 8.dp)) {
+            items(receivedMessages.size) { index ->
+                Text(text = receivedMessages[index])
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun MainScreenPreview() {
+    GPIOcontrolTheme {
+        MainScreen(
+            receivedMessages = listOf("0x28 0xBB 0x66 0x29", "0x28 0xAA 0x55 0x29"),
+            onSendClicked = {}
+        )
     }
 }
