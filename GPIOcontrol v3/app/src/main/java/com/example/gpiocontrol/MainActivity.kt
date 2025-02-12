@@ -2,36 +2,52 @@ package com.example.gpiocontrol
 
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.gpiocontrol.ui.theme.GPIOcontrolTheme
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import android.serialport.SerialPort
-import java.io.*
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 
 class MainActivity : ComponentActivity() {
 
+    // UART objects
     private var serialPort: SerialPort? = null
     private var uartOutput: OutputStream? = null
+    private var uartInput: InputStream? = null
+
+    // State to hold received messages
+    private val receivedMessages = mutableStateListOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState) // ✅ Always call the superclass method
-
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
             GPIOcontrolTheme {
                 MainScreen(
-                    onStartSending = { sendCsvData() }
+                    receivedMessages = receivedMessages,
+                    onSendHexClicked = { hexInput -> sendHexFromInput(hexInput) }
                 )
             }
         }
 
         // Initialize UART
         initUart()
+        // Read UART data
+        readUartData()
     }
 
     /**
@@ -40,6 +56,7 @@ class MainActivity : ComponentActivity() {
     private fun initUart() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                // Request root access before opening serial port
                 val process = Runtime.getRuntime().exec("su")
                 val os = process.outputStream
                 os.write("chmod 666 /dev/ttyS1\n".toByteArray())
@@ -48,108 +65,144 @@ class MainActivity : ComponentActivity() {
                 os.close()
                 process.waitFor()
 
+                // Open serial port
                 serialPort = SerialPort(File("/dev/ttyS1"), 19200, 0, 8, 1, 0)
                 uartOutput = serialPort?.outputStream
+                uartInput = serialPort?.inputStream
 
                 Log.d("UART", "UART initialized on /dev/ttyS1 at 19200 baud with root access")
             } catch (e: Exception) {
-                Log.e("UART", "Error initializing UART: ${e.message}")
+                Log.e("UART", "Error initializing UART with root: ${e.message}")
             }
         }
     }
 
     /**
-     * Reads UART data from a CSV file and sends raw binary over UART.
+     * Reads UART data and updates the received messages.
      */
-    private fun sendCsvData() {
+    private fun readUartData() {
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val filePath = "/storage/emulated/0/Documents/fullsystemstandby.csv"
-                val file = File(filePath)
-                if (!file.exists()) {
-                    Log.e("CSV", "CSV file not found: $filePath")
-                    return@launch
-                }
+            val buffer = ByteArray(1024)
+            while (true) {
+                try {
+                    val bytesRead = uartInput?.read(buffer) ?: -1
+                    if (bytesRead > 0) {
+                        val receivedData = buffer.copyOfRange(0, bytesRead)
+                        val receivedHex = receivedData.joinToString(" ") { "0x${it.toUByte().toString(16)}" }
+                        Log.d("UART", "Received: $receivedHex")
 
-                val bufferedReader = BufferedReader(FileReader(file))
-                var lastTimestamp = 0.0
-
-                bufferedReader.useLines { lines ->
-                    lines.drop(1).forEach { line -> // Skip CSV header
-                        val parts = line.split(",")
-                        if (parts.size >= 2) {
-                            val time = parts[0].toDoubleOrNull() ?: 0.0
-                            val binaryTx = parts[1].trim()
-
-                            // Ensure the binary string is valid
-                            if (!binaryTx.matches(Regex("^[01]+$"))) {
-                                Log.e("CSV", "Invalid binary format: $binaryTx")
-                                return@forEach
-                            }
-
-                            // Calculate delay based on time difference
-                            val delayTime = ((time - lastTimestamp) * 1000).toLong() // Convert to milliseconds
-                            if (delayTime > 0) {
-                                delay(delayTime)
-                            }
-                            lastTimestamp = time
-
-                            // Convert binary to bytes and send over UART
-                            sendBinaryMessage(binaryTx)
+                        // Update UI with received data
+                        runOnUiThread {
+                            receivedMessages.add(receivedHex)
                         }
                     }
+                } catch (e: Exception) {
+                    Log.e("UART", "Error reading UART: ${e.message}")
+                    break
                 }
-                Log.d("CSV", "Finished sending CSV data.")
-            } catch (e: Exception) {
-                Log.e("CSV", "Error reading CSV file: ${e.message}")
             }
         }
     }
 
     /**
-     * Sends a binary string as raw binary over UART.
+     * Sends hex input from the UI.
      */
-    private fun sendBinaryMessage(binary: String) {
+    private fun sendHexFromInput(hexInput: String) {
+        val byteArray = parseHexInput(hexInput)
+        if (byteArray != null) {
+            sendMessage(byteArray)
+        } else {
+            Toast.makeText(this, "Invalid hex format", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Sends the byte array via UART.
+     */
+    private fun sendMessage(byteArray: ByteArray) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val byteData = binaryToByteArray(binary)
-                uartOutput?.write(byteData)
+                uartOutput?.write(byteArray)
                 uartOutput?.flush()
-
-                Log.d("UART", "Sent Binary: $binary")
+                Log.d("UART", "Sent hex")
             } catch (e: Exception) {
-                Log.e("UART", "Error sending UART binary data: ${e.message}")
+                Log.e("UART", "Error sending UART data: ${e.message}")
             }
         }
-    }
-
-    /**
-     * Converts a binary string to a byte array.
-     */
-    private fun binaryToByteArray(binary: String): ByteArray {
-        val byteArray = mutableListOf<Byte>()
-        binary.chunked(8).forEach { byteChunk ->
-            val byteValue = byteChunk.toInt(2).toByte()
-            byteArray.add(byteValue)
-        }
-        return byteArray.toByteArray()
     }
 }
 
 /**
- * Composable UI for starting UART communication.
+ * Composable UI for sending and receiving UART messages.
  */
 @Composable
 fun MainScreen(
-    onStartSending: () -> Unit
+    receivedMessages: List<String>,
+    onSendHexClicked: (String) -> Unit
 ) {
+    var hexInput by remember { mutableStateOf("") }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        // Start Button
+        // Hex input field
+        OutlinedTextField(
+            value = hexInput,
+            onValueChange = { hexInput = it },
+            label = { Text("Enter Hex Values") },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+        )
+
+        // Button to send entered hex
         Button(
-            onClick = { onStartSending() },
+            onClick = {
+                onSendHexClicked(hexInput)
+            },
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
         ) {
-            Text("Start UART Transmission")
+            Text("Send Hex")
+        }
+
+        // Received Messages List
+        Text(
+            text = "Received Messages:",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 16.dp)
+        )
+        LazyColumn(modifier = Modifier.fillMaxHeight().padding(top = 8.dp)) {
+            items(receivedMessages.size) { index ->
+                Text(text = receivedMessages[index])
+            }
         }
     }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun MainScreenPreview() {
+    GPIOcontrolTheme {
+        MainScreen(
+            receivedMessages = listOf("0x28·0xBB·0x66·0x29", "0x28·0xAA·0x55·0x29"),
+            onSendHexClicked = {}
+        )
+    }
+}
+
+/**
+ * Parses a hex input string (e.g., "0x23·0x34") into a byte array.
+ * Returns null if the input is not valid.
+ */
+fun parseHexInput(input: String): ByteArray? {
+    val hexStrings = input.trim().split("·")
+    val byteList = mutableListOf<Byte>()
+
+    for (hex in hexStrings) {
+        try {
+            // Remove leading "0x" and convert to byte
+            val byteValue = hex.removePrefix("0x").toInt(16).toByte()
+            byteList.add(byteValue)
+        } catch (e: NumberFormatException) {
+            return null // Return null if any value is not a valid hex byte
+        }
+    }
+
+    return byteList.toByteArray()
 }
